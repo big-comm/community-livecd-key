@@ -1,0 +1,202 @@
+name: BigCommunity Update Key
+
+# Controls when the workflow will run
+on:
+  schedule:
+    - cron: "0 23 * * 3"
+  push:
+    branches: ["*"]
+  # Allows manual workflow run from the Actions tab
+  workflow_dispatch:
+
+# A workflow run is made up of one or more jobs
+jobs:
+  build:
+    # The type of runner the job will run on
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Grants GITHUB_TOKEN permission to push
+
+    # Steps represent a sequence of tasks
+    steps:
+      # Checks out the repository
+      - uses: actions/checkout@v3
+
+      - id: install-build-dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install \
+          build-essential \
+          cmake \
+          git \
+          libarchive-dev \
+          libarchive-tools \
+          libcurl4-openssl-dev \
+          libgpgme-dev \
+          libssl-dev \
+          zip \
+          python3-pip
+          sudo pip3 install meson
+          sudo pip3 install ninja
+
+      - name: install-pacman
+        shell: bash
+        run: |
+          echo "### install-pacman ###"
+          (
+            sudo git clone --depth 1 https://gitlab.manjaro.org/packages/core/pacman.git
+            pushd pacman
+              # Get the latest version of pacman
+              LATEST_VERSION=$(curl -s https://gitlab.archlinux.org/api/v4/projects/pacman%2Fpacman/repository/tags | jq -r '.[0].name' | cut -c2-)
+              echo "Downloading version $LATEST_VERSION of pacman"
+
+              # Download source file
+              PACMAN_ARCHIVE="pacman-v${LATEST_VERSION}.tar.gz"
+              PACMAN_DOWNLOAD_URL="https://gitlab.archlinux.org/pacman/pacman/-/archive/v${LATEST_VERSION}/${PACMAN_ARCHIVE}"
+              sudo wget "$PACMAN_DOWNLOAD_URL"
+
+              # Check if download succeeded
+              if [ -f "$PACMAN_ARCHIVE" ]; then
+                echo "Download completed successfully"
+              else
+                echo "Error downloading file $PACMAN_ARCHIVE"
+                exit 1
+              fi
+
+              # Extract source file
+              sudo tar -xzf "$PACMAN_ARCHIVE"
+              PACMAN_DIR="pacman-v${LATEST_VERSION}"
+
+              pushd "$PACMAN_DIR"
+                sudo meson --prefix=/usr \
+                          --buildtype=plain \
+                          -Ddoc=disabled \
+                          -Ddoxygen=enabled \
+                          -Dscriptlet-shell=/usr/bin/bash \
+                          -Dldconfig=/usr/bin/ldconfig \
+                          build || exit 1
+                sudo meson compile -C build || exit 1
+                sudo meson install -C build || exit 1
+              popd
+              sudo install -m644 pacman.conf /etc/pacman.conf
+              sudo install -m644 makepkg.conf /etc/
+              sudo mkdir -p /etc/pacman.d
+              sudo wget https://raw.githubusercontent.com/BigLinux-Package-Build/manjaro-mirror/main/mirrorlist -O /etc/pacman.d/mirrorlist
+            popd
+            sudo rm -r pacman
+          ) || exit 1
+
+          # Add biglinux and community repositories
+          sudo sed -i '/[core]/{h;s/.*/[biglinux-update-stable]/;p;x;}' /etc/pacman.conf
+          sudo sed -i '/[core]/{h;s/.*/SigLevel = PackageRequired/;p;x;}' /etc/pacman.conf
+          sudo sed -i '/[core]/{h;s/.*/Server = https:\/\/repo.biglinux.com.br\/update-stable\/$arch/;p;x;}' /etc/pacman.conf
+          sudo sed -i '/[core]/{h;s/.*//;p;x;}' /etc/pacman.conf
+          echo '
+          [community-testing]
+          SigLevel = PackageRequired
+          Server = https://repo.communitybig.org/testing/$arch' | sudo tee -a /etc/pacman.conf
+          echo '
+          [community-stable]
+          SigLevel = PackageRequired
+          Server = https://repo.communitybig.org/testing/$arch' | sudo tee -a /etc/pacman.conf
+          echo '
+          [biglinux-testing]
+          SigLevel = PackageRequired
+          Server = https://repo.biglinux.com.br/testing/$arch' | sudo tee -a /etc/pacman.conf
+          echo '
+          [biglinux-stable]
+          SigLevel = PackageRequired
+          Server = https://repo.biglinux.com.br/stable/$arch' | sudo tee -a /etc/pacman.conf
+
+      - name: install keyrings
+        shell: bash
+        run: |
+          sudo install -dm755 /usr/share/pacman/keyrings/
+          sudo git clone --depth 1 https://gitlab.manjaro.org/packages/core/manjaro-keyring.git
+          pushd manjaro-keyring
+            sudo install -m0644 manjaro.gpg /usr/share/pacman/keyrings/
+            sudo install -m0644 manjaro-trusted /usr/share/pacman/keyrings/
+            sudo install -m0644 manjaro-trusted /usr/share/pacman/keyrings/
+          popd
+          sudo rm -rf manjaro-keyring
+          mkdir -p archlinux-keyring
+          pushd archlinux-keyring
+            wget https://archlinux.org/packages/core/any/archlinux-keyring/download -O /tmp/archlinux-keyring.tar.zst
+            tar --use-compress-program=unzstd --strip-components=4 --wildcards -xvf /tmp/archlinux-keyring.tar.zst usr/share/pacman/keyrings/*
+            sudo install -m0644 archlinux.gpg /usr/share/pacman/keyrings/
+            sudo install -m0644 archlinux-trusted /usr/share/pacman/keyrings/
+            sudo install -m0644 archlinux-revoked /usr/share/pacman/keyrings/
+          popd
+          sudo rm -rf archlinux-keyring
+          sudo git clone --depth 1 https://github.com/biglinux/biglinux-keyring.git
+          pushd biglinux-keyring
+            sudo install -m0644 biglinux.gpg /usr/share/pacman/keyrings/
+            sudo install -m0644 biglinux-trusted /usr/share/pacman/keyrings/
+            sudo install -m0644 biglinux-trusted /usr/share/pacman/keyrings/
+          popd
+          sudo rm -rf biglinux-keyring
+          sudo git clone --depth 1 https://github.com/big-comm/community-keyring.git
+          pushd community-keyring
+            sudo install -m0644 community.gpg /usr/share/pacman/keyrings/
+            sudo install -m0644 community-trusted /usr/share/pacman/keyrings/
+            sudo install -m0644 community-revoked /usr/share/pacman/keyrings/
+          popd
+          sudo rm -r community-keyring
+
+      - name: Update Key
+        run: |
+          sudo pacman-key --init
+          sudo pacman-key --populate archlinux manjaro biglinux community
+          cp -fa /etc/pacman.d/gnupg/pubring.gpg  usr/share/pacman/keyrings/
+          cp -fa /etc/pacman.d/gnupg/trustdb.gpg  usr/share/pacman/keyrings/
+
+      - name: Update github
+        run: |
+          git add --all
+          git config --local user.email "178826223+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git commit -m "github-actions bot Update $(date +%Y-%m-%d)"
+
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
+
+      - name: Build Package on big-comm/build-package
+        shell: bash
+        run: |
+          repo_name=${{ github.repository }}
+          IFS='/' read -r owner repo <<< "$repo_name"
+          # Define data variable with valid JSON
+          data='{
+            "event_type": "'$repo'",
+            "client_payload": {
+              "branch": "stable",
+              "url": "https://github.com/${{ github.repository }}",
+              "branch_type": "stable"
+            }
+          }'
+
+          # Print JSON for debugging
+          echo "JSON being sent:"
+          echo "$data"
+
+          # Execute curl command with data
+          response=$(curl -s -X POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token ${{ secrets.REPOSITORY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            --data "$data" \
+            "https://api.github.com/repos/big-comm/build-package/dispatches")
+
+          echo "Full GitHub response:"
+          echo "$response"
+
+          if [ -z "$response" ]; then
+            echo "Build workflow '${{ github.repository }}' successfully triggered for branch stable."
+          else
+            echo "Error triggering the workflow: $response"
+            exit 1
+          fi
