@@ -2,6 +2,7 @@ pkgname=community-livecd-key
 pkgdesc="DO NOT USE THIS PACKAGE, only for ISO generation in CI/CD"
 pkgver=$(date +%y.%m.%d)
 pkgrel=$(date +%H%M)
+epoch=1
 arch=('any')
 license=('MIT')
 url="https://github.com/big-comm/${pkgname}"
