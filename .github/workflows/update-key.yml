@@ -103,12 +103,13 @@ jobs:
         shell: bash
         run: |
           sudo install -dm755 /usr/share/pacman/keyrings/
-          # The manjaro-keyring package from Manjaro's mirror (its GitLab is often
-          # down), found by name in the core database.
+          # The manjaro-keyring package from Manjaro's mirror, found by name in the
+          # core database (Manjaro's git forge moved and was often down). HTTPS only,
+          # redirects included.
           mirror=https://mirrors.manjaro.org/repo/stable/core/x86_64
-          curl -fsSL "$mirror/core.db" -o /tmp/core.db
+          curl -fsSL --proto '=https' --tlsv1.2 "$mirror/core.db" -o /tmp/core.db
           package=$(tar -xOf /tmp/core.db --wildcards 'manjaro-keyring-*/desc' | sed -n '/%FILENAME%/{n;p}')
-          curl -fsSL "$mirror/$package" -o /tmp/manjaro-keyring.pkg.tar.zst
+          curl -fsSL --proto '=https' --tlsv1.2 "$mirror/$package" -o /tmp/manjaro-keyring.pkg.tar.zst
           mkdir -p manjaro-keyring
           pushd manjaro-keyring
             tar --use-compress-program=unzstd --strip-components=4 -xvf /tmp/manjaro-keyring.pkg.tar.zst usr/share/pacman/keyrings
