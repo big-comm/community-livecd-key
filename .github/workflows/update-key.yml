@@ -6,8 +6,11 @@ name: Update Key
 on:
   schedule:
     - cron: "0 23 * * 3"
+  # Only main: the keyring files are regenerated (and change) on every run, so
+  # a run on another branch would commit them there too and every merge into
+  # main would conflict on those binary files.
   push:
-    branches: ["*"]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
