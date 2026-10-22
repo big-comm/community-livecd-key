@@ -1,200 +1,98 @@
-name: BigCommunity Update Key
+name: Update Key
 
-# Controls when the workflow will run
+# Rebuilds the pacman keyring shipped to the live ISO (pubring.gpg and
+# trustdb.gpg) from the Arch Linux, Manjaro, BigLinux and BigCommunity keyrings,
+# commits it when it changes and asks big-comm/build-package to build the package.
 on:
   schedule:
     - cron: "0 23 * * 3"
+  # Only main: the keyring files are regenerated (and change) on every run, so
+  # a run on another branch would commit them there too and every merge into
+  # main would conflict on those binary files.
   push:
-    branches: ["*"]
-  # Allows manual workflow run from the Actions tab
+    branches: [main]
   workflow_dispatch:
 
-# A workflow run is made up of one or more jobs
+permissions:
+  contents: write # commit the updated keyring
+
 jobs:
-  build:
-    # The type of runner the job will run on
+  update-key:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Grants GITHUB_TOKEN permission to push
-
-    # Steps represent a sequence of tasks
+    # pacman-key comes with the Manjaro image: no need to build pacman.
+    container: manjarolinux/base:latest
     steps:
-      # Checks out the repository
-      - uses: actions/checkout@v3
-
-      - id: install-build-dependencies
+      - name: Install tools and the official keyrings
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install \
-          build-essential \
-          cmake \
-          git \
-          libarchive-dev \
-          libarchive-tools \
-          libcurl4-openssl-dev \
-          libgpgme-dev \
-          libssl-dev \
-          zip \
-          python3-pip
-          sudo pip3 install meson
-          sudo pip3 install ninja
+          pacman -Syu --noconfirm --needed git archlinux-keyring manjaro-keyring
 
-      - name: install-pacman
+      - uses: actions/checkout@v5
+
+      - name: Install the BigLinux and BigCommunity keyrings
         shell: bash
         run: |
-          echo "### install-pacman ###"
-          (
-            # Get the latest version of pacman
-            LATEST_VERSION=$(curl -s https://gitlab.archlinux.org/api/v4/projects/pacman%2Fpacman/repository/tags | jq -r '.[0].name' | cut -c2-)
-            echo "Downloading version $LATEST_VERSION of pacman"
+          git clone --depth 1 https://github.com/biglinux/biglinux-keyring.git /tmp/biglinux-keyring
+          install -m0644 /tmp/biglinux-keyring/biglinux.gpg \
+                         /tmp/biglinux-keyring/biglinux-trusted \
+                         /tmp/biglinux-keyring/biglinux-revoked \
+                         /usr/share/pacman/keyrings/
+          git clone --depth 1 https://github.com/big-comm/community-keyring.git /tmp/community-keyring
+          install -m0644 /tmp/community-keyring/community.gpg \
+                         /tmp/community-keyring/community-trusted \
+                         /tmp/community-keyring/community-revoked \
+                         /usr/share/pacman/keyrings/
 
-            # Download source file
-            PACMAN_ARCHIVE="pacman-v${LATEST_VERSION}.tar.gz"
-            PACMAN_DOWNLOAD_URL="https://gitlab.archlinux.org/pacman/pacman/-/archive/v${LATEST_VERSION}/${PACMAN_ARCHIVE}"
-            sudo wget "$PACMAN_DOWNLOAD_URL"
-
-            # Check if download succeeded
-            if [ -f "$PACMAN_ARCHIVE" ]; then
-              echo "Download completed successfully"
-            else
-              echo "Error downloading file $PACMAN_ARCHIVE"
-              exit 1
-            fi
-
-            # Extract source file
-            sudo tar -xzf "$PACMAN_ARCHIVE"
-            PACMAN_DIR="pacman-v${LATEST_VERSION}"
-
-            pushd "$PACMAN_DIR"
-              sudo meson --prefix=/usr \
-                        --buildtype=plain \
-                        -Ddoc=disabled \
-                        -Ddoxygen=enabled \
-                        -Dscriptlet-shell=/usr/bin/bash \
-                        -Dldconfig=/usr/bin/ldconfig \
-                        build || exit 1
-              sudo meson compile -C build || exit 1
-              sudo meson install -C build || exit 1
-            popd
-            # meson install already put pacman.conf and makepkg.conf in /etc.
-            sudo rm -rf "$PACMAN_DIR" "$PACMAN_ARCHIVE"
-            sudo mkdir -p /etc/pacman.d
-            echo 'Server = https://mirrors.manjaro.org/repo/stable/$repo/$arch' | sudo tee /etc/pacman.d/mirrorlist
-          ) || exit 1
-
-          # Add biglinux and community repositories, the same line for every
-          # section (pacman turns $repo into the section name).
-          sudo sed -i '/\[core\]/i\
-          [biglinux-priority]\
-          SigLevel = PackageRequired\
-          Server = https://packages.biglinux.com.br/$repo/$arch\
-          ' /etc/pacman.conf
-          for repo in community-testing community-stable biglinux-testing biglinux-stable; do
-            case $repo in
-              community-*) host=repo.communitybig.org ;;
-              *) host=packages.biglinux.com.br ;;
-            esac
-            printf '\n[%s]\nSigLevel = PackageRequired\nServer = https://%s/$repo/$arch\n' "$repo" "$host" |
-              sudo tee -a /etc/pacman.conf
-          done
-
-      - name: install keyrings
+      - name: Update key
         shell: bash
         run: |
-          sudo install -dm755 /usr/share/pacman/keyrings/
-          # The manjaro-keyring package from Manjaro's mirror, found by name in the
-          # core database (Manjaro's git forge moved and was often down). HTTPS only,
-          # redirects included.
-          mirror=https://mirrors.manjaro.org/repo/stable/core/x86_64
-          curl -fsSL --proto '=https' --tlsv1.2 "$mirror/core.db" -o /tmp/core.db
-          package=$(tar -xOf /tmp/core.db --wildcards 'manjaro-keyring-*/desc' | sed -n '/%FILENAME%/{n;p}')
-          curl -fsSL --proto '=https' --tlsv1.2 "$mirror/$package" -o /tmp/manjaro-keyring.pkg.tar.zst
-          mkdir -p manjaro-keyring
-          pushd manjaro-keyring
-            tar --use-compress-program=unzstd --strip-components=4 -xvf /tmp/manjaro-keyring.pkg.tar.zst usr/share/pacman/keyrings
-            sudo install -m0644 manjaro.gpg /usr/share/pacman/keyrings/
-            sudo install -m0644 manjaro-trusted /usr/share/pacman/keyrings/
-            sudo install -m0644 manjaro-revoked /usr/share/pacman/keyrings/
-          popd
-          rm -rf manjaro-keyring
-          mkdir -p archlinux-keyring
-          pushd archlinux-keyring
-            wget https://archlinux.org/packages/core/any/archlinux-keyring/download -O /tmp/archlinux-keyring.tar.zst
-            tar --use-compress-program=unzstd --strip-components=4 --wildcards -xvf /tmp/archlinux-keyring.tar.zst usr/share/pacman/keyrings/*
-            sudo install -m0644 archlinux.gpg /usr/share/pacman/keyrings/
-            sudo install -m0644 archlinux-trusted /usr/share/pacman/keyrings/
-            sudo install -m0644 archlinux-revoked /usr/share/pacman/keyrings/
-          popd
-          sudo rm -rf archlinux-keyring
-          sudo git clone --depth 1 https://github.com/biglinux/biglinux-keyring.git
-          pushd biglinux-keyring
-            sudo install -m0644 biglinux.gpg /usr/share/pacman/keyrings/
-            sudo install -m0644 biglinux-trusted /usr/share/pacman/keyrings/
-            sudo install -m0644 biglinux-trusted /usr/share/pacman/keyrings/
-          popd
-          sudo rm -rf biglinux-keyring
-          sudo git clone --depth 1 https://github.com/big-comm/community-keyring.git
-          pushd community-keyring
-            sudo install -m0644 community.gpg /usr/share/pacman/keyrings/
-            sudo install -m0644 community-trusted /usr/share/pacman/keyrings/
-            sudo install -m0644 community-revoked /usr/share/pacman/keyrings/
-          popd
-          sudo rm -r community-keyring
+          rm -rf /etc/pacman.d/gnupg
+          pacman-key --init
+          pacman-key --populate archlinux manjaro biglinux community
+          # The BigLinux and BigCommunity signing keys must be there
+          pacman-key --list-keys F7EB9C2849EFFEFF05789738047C6A782618D2CA >/dev/null
+          pacman-key --list-keys AECEEE84E52BBFAA9F1C9DF01EA0CEEEB09B44A3 >/dev/null
+          cp -fa /etc/pacman.d/gnupg/pubring.gpg usr/share/pacman/keyrings/
+          cp -fa /etc/pacman.d/gnupg/trustdb.gpg usr/share/pacman/keyrings/
 
-      - name: Update Key
+      - name: Commit the updated keyring
+        id: commit
+        shell: bash
         run: |
-          sudo pacman-key --init
-          sudo pacman-key --populate archlinux manjaro biglinux community
-          cp -fa /etc/pacman.d/gnupg/pubring.gpg  usr/share/pacman/keyrings/
-          cp -fa /etc/pacman.d/gnupg/trustdb.gpg  usr/share/pacman/keyrings/
-
-      - name: Update github
-        run: |
-          git add --all
-          git config --local user.email "178826223+github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git commit -m "github-actions bot Update $(date +%Y-%m-%d)"
-
-      - name: Push changes
-        uses: ad-m/github-push-action@master
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ${{ github.ref }}
-
-      - name: Build Package on big-comm/build-package
-        shell: bash
-        run: |
-          repo_name=${{ github.repository }}
-          IFS='/' read -r owner repo <<< "$repo_name"
-          # Define data variable with valid JSON
-          data='{
-            "event_type": "'$repo'",
-            "client_payload": {
-              "branch": "stable",
-              "url": "https://github.com/${{ github.repository }}",
-              "branch_type": "stable"
-            }
-          }'
-
-          # Print JSON for debugging
-          echo "JSON being sent:"
-          echo "$data"
-
-          # Execute curl command with data
-          response=$(curl -s -X POST \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization: token ${{ secrets.REPOSITORY_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            --data "$data" \
-            "https://api.github.com/repos/big-comm/build-package/dispatches")
-
-          echo "Full GitHub response:"
-          echo "$response"
-
-          if [ -z "$response" ]; then
-            echo "Build workflow '${{ github.repository }}' successfully triggered for branch stable."
+          git add usr/share/pacman/keyrings/pubring.gpg usr/share/pacman/keyrings/trustdb.gpg
+          if git diff --cached --quiet; then
+            echo "Keyring unchanged"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Error triggering the workflow: $response"
+            git commit -m "github-actions bot Update $(date +%Y-%m-%d)"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The weekly run only builds when the keyring changed; a push or a
+      # manual run always builds (the package files may have changed).
+      - name: Build package on big-comm/build-package
+        if: steps.commit.outputs.changed == 'true' || github.event_name != 'schedule'
+        shell: bash
+        env:
+          REPOSITORY_TOKEN: ${{ secrets.REPOSITORY_TOKEN }}
+        run: |
+          [[ -n $REPOSITORY_TOKEN ]] || { echo "::error::REPOSITORY_TOKEN secret is not set"; exit 1; }
+          repo=${GITHUB_REPOSITORY#*/}
+          data=$(printf '{"event_type":"%s","client_payload":{"url":"https://github.com/%s","branch":"%s","branch_type":"stable"}}' \
+            "$repo" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME")
+          echo "Payload: $data"
+          status=$(curl -sS -o /tmp/response -w '%{http_code}' -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $REPOSITORY_TOKEN" \
+            --data "$data" \
+            https://api.github.com/repos/big-comm/build-package/dispatches)
+          if [[ $status == 204 ]]; then
+            echo "Build of $repo requested (stable)"
+          else
+            echo "::error::GitHub answered HTTP $status: $(cat /tmp/response)"
             exit 1
           fi
