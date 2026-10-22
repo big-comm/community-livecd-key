@@ -87,28 +87,21 @@ jobs:
             sudo rm -r pacman
           ) || exit 1
 
-          # Add biglinux and community repositories
+          # Add biglinux and community repositories, the same line for every
+          # section (pacman turns $repo into the section name).
           sudo sed -i '/\[core\]/i\
-          [biglinux-update-stable]\
+          [biglinux-priority]\
           SigLevel = PackageRequired\
-          Server = https://repo.biglinux.com.br/update-stable/$arch\
+          Server = https://packages.biglinux.com.br/$repo/$arch\
           ' /etc/pacman.conf
-          echo '
-          [community-testing]
-          SigLevel = PackageRequired
-          Server = https://repo.communitybig.org/testing/$arch' | sudo tee -a /etc/pacman.conf
-          echo '
-          [community-stable]
-          SigLevel = PackageRequired
-          Server = https://repo.communitybig.org/testing/$arch' | sudo tee -a /etc/pacman.conf
-          echo '
-          [biglinux-testing]
-          SigLevel = PackageRequired
-          Server = https://repo.biglinux.com.br/testing/$arch' | sudo tee -a /etc/pacman.conf
-          echo '
-          [biglinux-stable]
-          SigLevel = PackageRequired
-          Server = https://repo.biglinux.com.br/stable/$arch' | sudo tee -a /etc/pacman.conf
+          for repo in community-testing community-stable biglinux-testing biglinux-stable; do
+            case $repo in
+              community-*) host=repo.communitybig.org ;;
+              *) host=packages.biglinux.com.br ;;
+            esac
+            printf '\n[%s]\nSigLevel = PackageRequired\nServer = https://%s/$repo/$arch\n' "$repo" "$host" |
+              sudo tee -a /etc/pacman.conf
+          done
 
       - name: install keyrings
         shell: bash
