@@ -1,9 +1,9 @@
 [Unit]
-Description=copy keys to /etc/pacman.d/gnupg/
+Description=Put the BigCommunity live session keyring in /etc/pacman.d/gnupg
 After=pacman-init.service
 
 [Service]
-Type=simple
+Type=oneshot
 ExecStart=/usr/bin/community-livecd-key.sh
 
 [Install]
