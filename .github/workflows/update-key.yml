@@ -45,46 +45,42 @@ jobs:
         run: |
           echo "### install-pacman ###"
           (
-            sudo git clone --depth 1 https://gitlab.manjaro.org/packages/core/pacman.git
-            pushd pacman
-              # Get the latest version of pacman
-              LATEST_VERSION=$(curl -s https://gitlab.archlinux.org/api/v4/projects/pacman%2Fpacman/repository/tags | jq -r '.[0].name' | cut -c2-)
-              echo "Downloading version $LATEST_VERSION of pacman"
+            # Get the latest version of pacman
+            LATEST_VERSION=$(curl -s https://gitlab.archlinux.org/api/v4/projects/pacman%2Fpacman/repository/tags | jq -r '.[0].name' | cut -c2-)
+            echo "Downloading version $LATEST_VERSION of pacman"
 
-              # Download source file
-              PACMAN_ARCHIVE="pacman-v${LATEST_VERSION}.tar.gz"
-              PACMAN_DOWNLOAD_URL="https://gitlab.archlinux.org/pacman/pacman/-/archive/v${LATEST_VERSION}/${PACMAN_ARCHIVE}"
-              sudo wget "$PACMAN_DOWNLOAD_URL"
+            # Download source file
+            PACMAN_ARCHIVE="pacman-v${LATEST_VERSION}.tar.gz"
+            PACMAN_DOWNLOAD_URL="https://gitlab.archlinux.org/pacman/pacman/-/archive/v${LATEST_VERSION}/${PACMAN_ARCHIVE}"
+            sudo wget "$PACMAN_DOWNLOAD_URL"
 
-              # Check if download succeeded
-              if [ -f "$PACMAN_ARCHIVE" ]; then
-                echo "Download completed successfully"
-              else
-                echo "Error downloading file $PACMAN_ARCHIVE"
-                exit 1
-              fi
+            # Check if download succeeded
+            if [ -f "$PACMAN_ARCHIVE" ]; then
+              echo "Download completed successfully"
+            else
+              echo "Error downloading file $PACMAN_ARCHIVE"
+              exit 1
+            fi
 
-              # Extract source file
-              sudo tar -xzf "$PACMAN_ARCHIVE"
-              PACMAN_DIR="pacman-v${LATEST_VERSION}"
+            # Extract source file
+            sudo tar -xzf "$PACMAN_ARCHIVE"
+            PACMAN_DIR="pacman-v${LATEST_VERSION}"
 
-              pushd "$PACMAN_DIR"
-                sudo meson --prefix=/usr \
-                          --buildtype=plain \
-                          -Ddoc=disabled \
-                          -Ddoxygen=enabled \
-                          -Dscriptlet-shell=/usr/bin/bash \
-                          -Dldconfig=/usr/bin/ldconfig \
-                          build || exit 1
-                sudo meson compile -C build || exit 1
-                sudo meson install -C build || exit 1
-              popd
-              sudo install -m644 pacman.conf /etc/pacman.conf
-              sudo install -m644 makepkg.conf /etc/
-              sudo mkdir -p /etc/pacman.d
-              sudo wget https://raw.githubusercontent.com/BigLinux-Package-Build/manjaro-mirror/main/mirrorlist -O /etc/pacman.d/mirrorlist
+            pushd "$PACMAN_DIR"
+              sudo meson --prefix=/usr \
+                        --buildtype=plain \
+                        -Ddoc=disabled \
+                        -Ddoxygen=enabled \
+                        -Dscriptlet-shell=/usr/bin/bash \
+                        -Dldconfig=/usr/bin/ldconfig \
+                        build || exit 1
+              sudo meson compile -C build || exit 1
+              sudo meson install -C build || exit 1
             popd
-            sudo rm -r pacman
+            # meson install already put pacman.conf and makepkg.conf in /etc.
+            sudo rm -rf "$PACMAN_DIR" "$PACMAN_ARCHIVE"
+            sudo mkdir -p /etc/pacman.d
+            echo 'Server = https://mirrors.manjaro.org/repo/stable/$repo/$arch' | sudo tee /etc/pacman.d/mirrorlist
           ) || exit 1
 
           # Add biglinux and community repositories, the same line for every
@@ -107,13 +103,20 @@ jobs:
         shell: bash
         run: |
           sudo install -dm755 /usr/share/pacman/keyrings/
-          sudo git clone --depth 1 https://gitlab.manjaro.org/packages/core/manjaro-keyring.git
+          # The manjaro-keyring package from Manjaro's mirror (its GitLab is often
+          # down), found by name in the core database.
+          mirror=https://mirrors.manjaro.org/repo/stable/core/x86_64
+          curl -fsSL "$mirror/core.db" -o /tmp/core.db
+          package=$(tar -xOf /tmp/core.db --wildcards 'manjaro-keyring-*/desc' | sed -n '/%FILENAME%/{n;p}')
+          curl -fsSL "$mirror/$package" -o /tmp/manjaro-keyring.pkg.tar.zst
+          mkdir -p manjaro-keyring
           pushd manjaro-keyring
+            tar --use-compress-program=unzstd --strip-components=4 -xvf /tmp/manjaro-keyring.pkg.tar.zst usr/share/pacman/keyrings
             sudo install -m0644 manjaro.gpg /usr/share/pacman/keyrings/
             sudo install -m0644 manjaro-trusted /usr/share/pacman/keyrings/
-            sudo install -m0644 manjaro-trusted /usr/share/pacman/keyrings/
+            sudo install -m0644 manjaro-revoked /usr/share/pacman/keyrings/
           popd
-          sudo rm -rf manjaro-keyring
+          rm -rf manjaro-keyring
           mkdir -p archlinux-keyring
           pushd archlinux-keyring
             wget https://archlinux.org/packages/core/any/archlinux-keyring/download -O /tmp/archlinux-keyring.tar.zst
